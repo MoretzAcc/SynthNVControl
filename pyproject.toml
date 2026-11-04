@@ -1,5 +1,5 @@
 [project]
-name = "mosynthnvcontrol"
+name = "synthnvcontrol"
 version = "0.1.0"
 description = "Cross-platform desktop control application for Windfreak SynthNV devices"
 readme = "README.md"

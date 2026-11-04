@@ -37,15 +37,42 @@ class Request:
     drain_response: bool = False
 
 
-def available_targets() -> list[tuple[str, str, str | None]]:
-    """Return all serial ports; VID/PID is optional metadata, never a filter."""
-    targets = []
+def discover_synthnv_targets() -> list[tuple[DeviceTarget, str]]:
+    """Return USB serial devices that answer the SynthNV serial-number command."""
+    targets: list[tuple[DeviceTarget, str]] = []
     for port in list_ports.comports():
+        if port.vid is None or port.pid is None:
+            continue
+        serial_number = _probe_serial_number(port.device)
+        if not serial_number:
+            continue
         details = " · ".join(part for part in (port.description, port.manufacturer) if part)
-        if port.vid is not None and port.pid is not None:
-            details = f"{details} · {port.vid:04X}:{port.pid:04X}" if details else f"{port.vid:04X}:{port.pid:04X}"
-        targets.append((port.device, details or "Serial device", port.serial_number))
+        usb_id = f"{port.vid:04X}:{port.pid:04X}"
+        description = f"{details} · {usb_id}" if details else usb_id
+        targets.append((DeviceTarget(port.device, serial_number), description))
     return targets
+
+
+def _probe_serial_number(port: str) -> str | None:
+    """Ask a USB serial device for the documented SynthNV `-` response."""
+    try:
+        with serial.Serial(port, BAUD_RATE, timeout=0.5, write_timeout=0.5) as connection:
+            connection.reset_input_buffer()
+            connection.write(b"-")
+            connection.flush()
+            response = connection.read_until(b"\n").decode("utf-8", errors="replace").strip()
+    except (serial.SerialException, OSError):
+        return None
+    return response or None
+
+
+class DiscoveryWorker(QThread):
+    """Probe candidate USB serial devices without pausing the startup dialog."""
+
+    targets_found = Signal(object)
+
+    def run(self) -> None:
+        self.targets_found.emit(discover_synthnv_targets())
 
 
 class SerialWorker(QThread):

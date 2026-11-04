@@ -1,8 +1,8 @@
-# MoSynthNVControl
+# SynthNVControl
 
 > **AI-generated notice:** This project was primarily generated with AI assistance. Review it before production use.
 
-MoSynthNVControl is a Windows and Linux desktop controller for Windfreak
+SynthNVControl is a Windows and Linux desktop controller for Windfreak
 SynthNV USB-serial signal generators. It uses Python 3.14+, [uv](https://docs.astral.sh/uv/),
 PySide6, and pyserial.
 

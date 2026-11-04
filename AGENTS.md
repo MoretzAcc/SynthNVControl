@@ -2,7 +2,7 @@
 
 ## Project status
 
-MoSynthNVControl is a Python 3.14+ desktop application managed with `uv`.
+SynthNVControl is a Python 3.14+ desktop application managed with `uv`.
 Source lives in `src/synthnvcontrol`, and the supported entry points are
 `uv run synthnv`.
 Run the test suite with `uv run python -m unittest discover -s tests -v`.

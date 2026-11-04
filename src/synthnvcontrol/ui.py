@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QSplitter, QVBoxLayout, QWidget,
 )
 
-from synthnvcontrol.device import DeviceTarget, Request, SerialWorker, available_targets
+from synthnvcontrol.device import DeviceTarget, DiscoveryWorker, Request, SerialWorker
 from synthnvcontrol.protocol import BY_CODE, COMMANDS, GROUPS, Command, FieldKind
 from synthnvcontrol.storage import load_persistent, load_settings, save_persistent, save_settings
 
@@ -26,6 +26,7 @@ class StartupDialog(QDialog):
     def __init__(self) -> None:
         super().__init__()
         self.target: DeviceTarget | None = None
+        self._scanner: DiscoveryWorker | None = None
         self.setWindowTitle("SynthNV Control — Connect")
         self.resize(680, 360)
         layout = QVBoxLayout(self)
@@ -45,17 +46,31 @@ class StartupDialog(QDialog):
         self.refresh()
 
     def refresh(self) -> None:
+        if self._scanner is not None and self._scanner.isRunning():
+            return
         self.devices.clear()
-        for port, details, serial_number in available_targets():
-            item = QListWidgetItem(f"{port}\n{details}\nSerial: {serial_number or 'not reported'}")
-            item.setData(Qt.ItemDataRole.UserRole, DeviceTarget(port, serial_number))
+        self.devices.addItem("Scanning USB serial devices for SynthNV serial-number responses…")
+        self._scanner = DiscoveryWorker()
+        self._scanner.targets_found.connect(self.show_targets)
+        self._scanner.start()
+
+    def show_targets(self, targets: list[tuple[DeviceTarget, str]]) -> None:
+        self.devices.clear()
+        for target, details in targets:
+            item = QListWidgetItem(f"{details}\nPort: {target.port} · Serial: {target.serial_number}")
+            item.setData(Qt.ItemDataRole.UserRole, target)
             self.devices.addItem(item)
+        if not targets:
+            self.devices.addItem("No USB serial device responded with a SynthNV serial number.")
 
     def accept_target(self) -> None:
         item = self.devices.currentItem()
         if item is None:
             return
-        self.target = item.data(Qt.ItemDataRole.UserRole)
+        target = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(target, DeviceTarget):
+            return
+        self.target = target
         self.accept()
 
 

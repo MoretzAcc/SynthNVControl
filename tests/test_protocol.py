@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from synthnvcontrol.device import discover_synthnv_targets
 from synthnvcontrol.protocol import BY_CODE, COMMANDS
 
 
@@ -23,6 +26,19 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn(code, BY_CODE)
             self.assertFalse(BY_CODE[code].default_visible)
         self.assertGreaterEqual(len(COMMANDS), 45)
+
+    def test_startup_discovery_only_keeps_usb_devices_with_a_serial_response(self) -> None:
+        ports = [
+            SimpleNamespace(device="/dev/ttyUSB0", vid=0x1A2B, pid=0x0001, description="Candidate", manufacturer="Vendor"),
+            SimpleNamespace(device="/dev/ttyS0", vid=None, pid=None, description="Built-in", manufacturer=None),
+        ]
+        with patch("synthnvcontrol.device.list_ports.comports", return_value=ports), patch(
+            "synthnvcontrol.device._probe_serial_number", return_value="SN-42"
+        ) as probe:
+            targets = discover_synthnv_targets()
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0][0].serial_number, "SN-42")
+        probe.assert_called_once_with("/dev/ttyUSB0")
 
 
 if __name__ == "__main__":
