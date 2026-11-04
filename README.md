@@ -5,3 +5,6 @@ https://windfreaktech.com/wp-content/uploads/docs/synthnv/rf-%20network-analyzer
 
 Documentation Serial Connection:
 https://windfreaktech.com/wp-content/uploads/docs/synthnv/serialcomm.pdf
+
+More, maybe useless information:
+https://windfreaktech.com/wp-content/uploads/docs/synthnv/readme.pdf
