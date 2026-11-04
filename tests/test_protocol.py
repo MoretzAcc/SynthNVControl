@@ -260,6 +260,31 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(window._submit.call_args.kwargs["drain_response"])
         self.assertEqual(window._submit.call_args.kwargs["response_terminator"], "endofsweep.")
 
+    def test_persistent_profile_keeps_rf_output_disabled(self) -> None:
+        window = MainWindow.__new__(MainWindow)
+        window.values = {"o": "1"}
+        window.rows = {}
+        window._operation_active = False
+        window._connected_to_device = True
+        window._unrecoverable = False
+        window._set_user_controls = MagicMock()
+        window.log = MagicMock()
+        submitted: list[str] = []
+
+        def submit(payload, _expects, _origin, callback, **_kwargs):
+            submitted.append(payload)
+            callback("", "")
+
+        window._submit = submit
+        window.apply_import_data(
+            {"version": 1, "values": {}},
+            operation="persistent profile",
+            restore_rf_output=False,
+        )
+
+        self.assertEqual(submitted, ["o0"])
+        self.assertEqual(window.values["o"], "0")
+
     def test_invalid_local_json_uses_the_tracked_default_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"

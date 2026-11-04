@@ -37,6 +37,7 @@ class StartupDialog(QDialog):
         self._scanner: DiscoveryWorker | None = None
         self.setWindowTitle("SynthNV Control — Connect")
         self.resize(680, 360)
+        self.settings = load_settings()
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Select the SynthNV serial device."))
         self.devices = QListWidget()
@@ -47,12 +48,25 @@ class StartupDialog(QDialog):
         self.connect_button.setDefault(True)
         buttons.addWidget(refresh)
         buttons.addStretch()
-        buttons.addWidget(self.connect_button)
+        connection_options = QVBoxLayout()
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Apply defaults after connecting"))
+        self.persistent_startup = ToggleSwitch()
+        self.persistent_startup.setChecked(bool(self.settings.get("use_persistent_configuration", False)))
+        self.persistent_startup.toggled.connect(self.set_persistent_startup)
+        profile_row.addWidget(self.persistent_startup)
+        connection_options.addLayout(profile_row)
+        connection_options.addWidget(self.connect_button)
+        buttons.addLayout(connection_options)
         layout.addLayout(buttons)
         refresh.clicked.connect(self.refresh)
         self.connect_button.clicked.connect(self.accept_target)
         self.devices.itemDoubleClicked.connect(lambda _: self.accept_target())
         self.refresh()
+
+    def set_persistent_startup(self, enabled: bool) -> None:
+        self.settings["use_persistent_configuration"] = enabled
+        save_settings(self.settings)
 
     def refresh(self) -> None:
         if self._scanner is not None and self._scanner.isRunning():
@@ -560,7 +574,11 @@ class MainWindow(QMainWindow):
                     self._startup_complete = True
                     if self.settings.get("use_persistent_configuration", False):
                         self.log("[persistent] Applying persistent configuration.")
-                        self.apply_import_data(load_persistent())
+                        self.apply_import_data(
+                            load_persistent(),
+                            operation="persistent startup",
+                            restore_rf_output=False,
+                        )
                 if on_complete:
                     on_complete()
                 return
@@ -723,6 +741,7 @@ class MainWindow(QMainWindow):
         operation: str = "import",
         on_complete: Callable[[], None] | None = None,
         manage_operation: bool = True,
+        restore_rf_output: bool = True,
     ) -> None:
         if self._operation_active and manage_operation:
             self.log(f"[{operation}] Another device operation is already active.")
@@ -780,6 +799,14 @@ class MainWindow(QMainWindow):
                 pending.append((command, value))
 
         def finish() -> None:
+            if not restore_rf_output:
+                self.values["o"] = "0"
+                if "o" in self.rows:
+                    self.rows["o"].show_value("0")
+                self.log(f"[{operation}] RF output remains disabled after profile application.")
+                self.log(f"[{operation}] Finished.")
+                complete()
+                return
             payload = BY_CODE["o"].write_payload(previous_rf_output)
             self.log(f"[{operation}] Restoring RF output state to {previous_rf_output}.")
             self._submit(payload, False, f"{origin} RF restore", after_restore)
@@ -853,7 +880,11 @@ class MainWindow(QMainWindow):
 
     def import_persistent(self) -> None:
         if QMessageBox.question(self, "Confirm import", "Apply the persistent device configuration now?") == QMessageBox.StandardButton.Yes:
-            self.apply_import_data(load_persistent())
+            self.apply_import_data(
+                load_persistent(),
+                operation="persistent profile",
+                restore_rf_output=False,
+            )
 
     def save_persistent(self) -> None:
         if QMessageBox.question(self, "Confirm save", "Replace the persistent device configuration with current values?") != QMessageBox.StandardButton.Yes:

@@ -26,6 +26,23 @@ RESPONSE_TIMEOUT_SECONDS = 1.5
 RECONNECT_INTERVAL_SECONDS = 2.0
 
 
+def log_command(
+    event: str,
+    origin: str,
+    command: str,
+    *,
+    port: str = "-",
+    response: str | None = None,
+) -> None:
+    """Write serial traffic in fixed-width columns for terminal readability."""
+    message = "%-8s origin=%-36s port=%-16s command=%-10r"
+    arguments: tuple[object, ...] = (event, origin, port, command)
+    if response is not None:
+        message += " response=%r"
+        arguments += (response,)
+    LOGGER.info(message, *arguments)
+
+
 @dataclass(frozen=True)
 class DeviceTarget:
     port: str
@@ -76,7 +93,7 @@ def _probe_serial_number(port: str) -> tuple[str | None, str | None]:
             # The legacy UI waited 200 ms before its first command as well.
             sleep(0.2)
             connection.reset_input_buffer()
-            LOGGER.info("sending command origin=automatic startup probe port=%s command='-'", port)
+            log_command("sending", "automatic startup probe", "-", port=port)
             connection.write(b"-")
             connection.flush()
             response = connection.read_until(b"\n").decode("utf-8", errors="replace").strip()
@@ -113,7 +130,7 @@ class SerialWorker(QThread):
         self._last_connection_error: str | None = None
 
     def submit(self, request: Request) -> None:
-        LOGGER.info("queued command origin=%s command=%r", request.origin, request.payload)
+        log_command("queued", request.origin, request.payload)
         self._requests.put(request)
 
     def identify(self, serial_number: str) -> None:
@@ -198,7 +215,7 @@ class SerialWorker(QThread):
         assert self._serial is not None
         try:
             self._serial.reset_input_buffer()
-            LOGGER.info("sending command origin=%s port=%s command=%r", request.origin, self._serial.port, request.payload)
+            log_command("sending", request.origin, request.payload, port=self._serial.port)
             self._serial.write(request.payload.encode("ascii"))
             self._serial.flush()
             response = ""
@@ -208,12 +225,12 @@ class SerialWorker(QThread):
                 else:
                     response = self._serial.read_until(b"\n").decode("utf-8", errors="replace").rstrip("\r\n")
                 if not response:
-                    LOGGER.warning("command timed out origin=%s command=%r", request.origin, request.payload)
+                    LOGGER.warning("timeout  origin=%-36s command=%-10r", request.origin, request.payload)
                     self.completed.emit(request.identifier, "", "No response before timeout")
                     return
-                LOGGER.info("received response origin=%s command=%r response=%r", request.origin, request.payload, response)
+                log_command("received", request.origin, request.payload, port=self._serial.port, response=response)
             else:
-                LOGGER.info("command sent without response origin=%s command=%r", request.origin, request.payload)
+                log_command("sent", request.origin, request.payload, port=self._serial.port)
             self.completed.emit(request.identifier, response, "")
         except (serial.SerialException, OSError) as error:
             LOGGER.warning("serial command failed origin=%s command=%r error=%s", request.origin, request.payload, error)
@@ -262,5 +279,5 @@ class SerialWorker(QThread):
                 request = self._requests.get_nowait()
             except Empty:
                 return
-            LOGGER.warning("cancelled queued command after disconnect origin=%s command=%r", request.origin, request.payload)
+            LOGGER.warning("cancelled origin=%-36s command=%-10r after disconnect", request.origin, request.payload)
             self.completed.emit(request.identifier, "", "Request cancelled by device disconnect")
