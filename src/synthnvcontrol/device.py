@@ -8,8 +8,9 @@ request queue and uses a per-request serial timeout instead.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from queue import Empty, Queue
-from time import monotonic
+from time import monotonic, sleep
 
 import serial
 from PySide6.QtCore import QThread, Signal
@@ -17,6 +18,8 @@ from serial.tools import list_ports
 
 from synthnvcontrol.platform_support import serial_access_hint
 
+
+LOGGER = logging.getLogger(__name__)
 
 BAUD_RATE = 115200
 RESPONSE_TIMEOUT_SECONDS = 1.5
@@ -34,36 +37,54 @@ class Request:
     identifier: int
     payload: str
     expect_response: bool
+    origin: str
     drain_response: bool = False
 
 
-def discover_synthnv_targets() -> list[tuple[DeviceTarget, str]]:
-    """Return USB serial devices that answer the SynthNV serial-number command."""
-    targets: list[tuple[DeviceTarget, str]] = []
+def discover_usb_targets() -> list[tuple[DeviceTarget, str, str | None, str | None]]:
+    """Return USB serial devices with their optional SynthNV serial response."""
+    # Temporary startup-window diagnostic mode: retain USB devices even when
+    # they do not answer `-`, so the user can inspect and select them.
+    targets: list[tuple[DeviceTarget, str, str | None, str | None]] = []
     for port in list_ports.comports():
-        if port.vid is None or port.pid is None:
+        if port.vid is None:
             continue
-        serial_number = _probe_serial_number(port.device)
-        if not serial_number:
-            continue
+        LOGGER.info("probing USB serial device port=%s", port.device)
+        serial_number, probe_error = _probe_serial_number(port.device)
         details = " · ".join(part for part in (port.description, port.manufacturer) if part)
-        usb_id = f"{port.vid:04X}:{port.pid:04X}"
+        usb_id = f"{port.vid:04X}:{port.pid:04X}" if port.pid is not None else f"{port.vid:04X}"
         description = f"{details} · {usb_id}" if details else usb_id
-        targets.append((DeviceTarget(port.device, serial_number), description))
+        targets.append((DeviceTarget(port.device, serial_number), description, serial_number, probe_error))
+        if serial_number:
+            LOGGER.info("SynthNV serial-number response port=%s serial=%r", port.device, serial_number)
+        elif probe_error:
+            LOGGER.warning("serial probe failed port=%s reason=%s", port.device, probe_error)
+        else:
+            LOGGER.info("no SynthNV serial-number response port=%s", port.device)
     return targets
 
 
-def _probe_serial_number(port: str) -> str | None:
+def discover_synthnv_targets() -> list[tuple[DeviceTarget, str, str | None, str | None]]:
+    """Return only USB serial devices that answer the SynthNV `-` command."""
+    return [target for target in discover_usb_targets() if target[2] is not None]
+
+
+def _probe_serial_number(port: str) -> tuple[str | None, str | None]:
     """Ask a USB serial device for the documented SynthNV `-` response."""
     try:
         with serial.Serial(port, BAUD_RATE, timeout=0.5, write_timeout=0.5) as connection:
+            # USB serial adapters can reset the device when their port opens.
+            # The legacy UI waited 200 ms before its first command as well.
+            sleep(0.2)
             connection.reset_input_buffer()
+            LOGGER.info("sending command origin=automatic startup probe port=%s command='-'", port)
             connection.write(b"-")
             connection.flush()
             response = connection.read_until(b"\n").decode("utf-8", errors="replace").strip()
-    except (serial.SerialException, OSError):
-        return None
-    return response or None
+    except (serial.SerialException, OSError) as error:
+        LOGGER.warning("could not probe serial number port=%s error=%s", port, error)
+        return None, serial_access_hint(error)
+    return response or None, None
 
 
 class DiscoveryWorker(QThread):
@@ -91,6 +112,7 @@ class SerialWorker(QThread):
         self._last_connection_error: str | None = None
 
     def submit(self, request: Request) -> None:
+        LOGGER.info("queued command origin=%s command=%r", request.origin, request.payload)
         self._requests.put(request)
 
     def identify(self, serial_number: str) -> None:
@@ -99,6 +121,7 @@ class SerialWorker(QThread):
             self._target = DeviceTarget(self._target.port, serial_number.strip())
 
     def stop(self) -> None:
+        LOGGER.info("stopping serial worker")
         self._running = False
         self.wait(2_000)
 
@@ -128,23 +151,33 @@ class SerialWorker(QThread):
         self._last_attempt = now
         port = self._reconnect_port()
         if port is None:
+            LOGGER.info("reconnect skipped: original serial number is not currently available")
             return False
         try:
             self._serial = serial.Serial(port, BAUD_RATE, timeout=RESPONSE_TIMEOUT_SECONDS, write_timeout=1)
         except (serial.SerialException, OSError) as error:
             message = serial_access_hint(error)
+            LOGGER.warning("could not open serial port=%s error=%s", port, error)
             if message != self._last_connection_error:
                 self.disconnected.emit(message)
                 self._last_connection_error = message
             return False
+        # Do not issue startup queries while the device is still recovering
+        # from a possible USB-serial open/reset transition.
+        self.msleep(200)
         reconnected = self._was_connected
         self._was_connected = True
         self._last_connection_error = None
+        LOGGER.info("serial connection opened port=%s reconnected=%s", port, reconnected)
         self.connected.emit(reconnected)
         return True
 
     def _device_is_present(self) -> bool:
-        return any(port.serial_number == self._target.serial_number for port in list_ports.comports())
+        # `PortInfo.serial_number` is USB metadata and need not match the
+        # SynthNV protocol serial number returned by `-`. The current port is
+        # sufficient for passive presence detection; protocol matching happens
+        # when searching for a replacement port after a real disconnect.
+        return any(port.device == self._target.port for port in list_ports.comports())
 
     def _reconnect_port(self) -> str | None:
         if self._serial is None and not self._was_connected:
@@ -153,15 +186,18 @@ class SerialWorker(QThread):
         # after a serial-number match; never attach to an arbitrary new device.
         if not self._target.serial_number:
             return None
-        for port in list_ports.comports():
-            if port.serial_number == self._target.serial_number:
-                return port.device
+        for target, _details, serial_number, _error in discover_synthnv_targets():
+            if serial_number == self._target.serial_number:
+                LOGGER.info("found reconnect candidate port=%s serial=%r", target.port, serial_number)
+                self._target = target
+                return target.port
         return None
 
     def _perform(self, request: Request) -> None:
         assert self._serial is not None
         try:
             self._serial.reset_input_buffer()
+            LOGGER.info("sending command origin=%s port=%s command=%r", request.origin, self._serial.port, request.payload)
             self._serial.write(request.payload.encode("ascii"))
             self._serial.flush()
             response = ""
@@ -171,10 +207,15 @@ class SerialWorker(QThread):
                 else:
                     response = self._serial.read_until(b"\n").decode("utf-8", errors="replace").rstrip("\r\n")
                 if not response:
+                    LOGGER.warning("command timed out origin=%s command=%r", request.origin, request.payload)
                     self.completed.emit(request.identifier, "", "No response before timeout")
                     return
+                LOGGER.info("received response origin=%s command=%r response=%r", request.origin, request.payload, response)
+            else:
+                LOGGER.info("command sent without response origin=%s command=%r", request.origin, request.payload)
             self.completed.emit(request.identifier, response, "")
         except (serial.SerialException, OSError) as error:
+            LOGGER.warning("serial command failed origin=%s command=%r error=%s", request.origin, request.payload, error)
             self._close()
             self.disconnected.emit(f"Disconnected: {error}")
             self.completed.emit(request.identifier, "", "Device disconnected")
@@ -208,6 +249,7 @@ class SerialWorker(QThread):
             except (serial.SerialException, OSError):
                 pass
         self._serial = None
+        LOGGER.info("serial connection closed")
 
     def _fail_pending_requests(self) -> None:
         """Never replay commands issued before a disconnect on a reconnected unit."""
@@ -216,4 +258,5 @@ class SerialWorker(QThread):
                 request = self._requests.get_nowait()
             except Empty:
                 return
+            LOGGER.warning("cancelled queued command after disconnect origin=%s command=%r", request.origin, request.payload)
             self.completed.emit(request.identifier, "", "Request cancelled by device disconnect")

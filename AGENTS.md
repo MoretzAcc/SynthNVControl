@@ -16,6 +16,10 @@ before display and export. This has not been exhaustively verified for every
 command or firmware revision. Treat protocol-response handling cautiously and
 verify changes against physical hardware before relying on them.
 
+On tested firmware 2.5f, the sweep options `r` and `d` accept writes but their
+`r?` and `d?` queries time out. Keep them write-only: do not include them in
+startup queries or automatic read-backs.
+
 ## Working conventions
 
 - Keep changes focused on the requested task and preserve unrelated user work.

@@ -13,6 +13,7 @@ class FieldKind(StrEnum):
     POWER = "power"
     INTEGER = "integer"
     HEX = "hex"
+    WRITE_ONLY = "write_only"
     READ_ONLY = "read_only"
     ACTION = "action"
 
@@ -30,8 +31,13 @@ class Command:
         return self.kind not in {FieldKind.READ_ONLY, FieldKind.ACTION}
 
     @property
+    def input_kind(self) -> FieldKind:
+        """Return the input validation kind for editable fields."""
+        return FieldKind.BOOLEAN if self.kind is FieldKind.WRITE_ONLY else self.kind
+
+    @property
     def can_query(self) -> bool:
-        return self.kind is not FieldKind.ACTION
+        return self.kind not in {FieldKind.ACTION, FieldKind.WRITE_ONLY}
 
     @property
     def exportable(self) -> bool:
@@ -42,19 +48,20 @@ class Command:
 
     def normalize(self, value: object) -> str:
         text = str(value).strip()
-        if self.kind is FieldKind.BOOLEAN:
+        kind = self.input_kind
+        if kind is FieldKind.BOOLEAN:
             if text not in {"0", "1"}:
                 raise ValueError("must be 0 or 1")
             return text
-        if self.kind is FieldKind.POWER:
+        if kind is FieldKind.POWER:
             if not text.isdigit() or not 0 <= int(text) <= 63:
                 raise ValueError("must be an integer from 0 to 63")
             return str(int(text))
-        if self.kind is FieldKind.INTEGER:
+        if kind is FieldKind.INTEGER:
             if not text.isdigit():
                 raise ValueError("must be a non-negative integer")
             return str(int(text))
-        if self.kind is FieldKind.DECIMAL:
+        if kind is FieldKind.DECIMAL:
             try:
                 number = Decimal(text)
             except InvalidOperation as error:
@@ -65,7 +72,7 @@ class Command:
             if "." in normalized:
                 normalized = normalized.rstrip("0").rstrip(".")
             return normalized or "0"
-        if self.kind is FieldKind.HEX:
+        if kind is FieldKind.HEX:
             if not text or any(char not in "0123456789abcdefABCDEF" for char in text):
                 raise ValueError("must contain hexadecimal digits only")
             return text.upper()
@@ -134,8 +141,8 @@ COMMANDS: tuple[Command, ...] = (
     Command("s", "Sweep step size (MHz)", "Sweep", FieldKind.DECIMAL, False),
     Command("t", "Sweep step time (ms)", "Sweep", FieldKind.DECIMAL, False),
     Command("g", "Run sweep", "Sweep", FieldKind.BOOLEAN, False),
-    Command("r", "Read detector while sweeping", "Sweep", FieldKind.BOOLEAN, False),
-    Command("d", "Report points while sweeping", "Sweep", FieldKind.BOOLEAN, False),
+    Command("r", "Read detector while sweeping", "Sweep", FieldKind.WRITE_ONLY, False),
+    Command("d", "Report points while sweeping", "Sweep", FieldKind.WRITE_ONLY, False),
     Command("m", "Sweep maximum and minimum", "Sweep", FieldKind.READ_ONLY, False),
     Command("c", "Continuous sweep", "Sweep", FieldKind.BOOLEAN, False),
     Command("F", "AM step time (µs)", "AM modulation", FieldKind.INTEGER, False),
