@@ -39,12 +39,11 @@ class Request:
     expect_response: bool
     origin: str
     drain_response: bool = False
+    response_terminator: str | None = None
 
 
 def discover_usb_targets() -> list[tuple[DeviceTarget, str, str | None, str | None]]:
     """Return USB serial devices with their optional SynthNV serial response."""
-    # Temporary startup-window diagnostic mode: retain USB devices even when
-    # they do not answer `-`, so the user can inspect and select them.
     targets: list[tuple[DeviceTarget, str, str | None, str | None]] = []
     for port in list_ports.comports():
         if port.vid is None:
@@ -93,7 +92,9 @@ class DiscoveryWorker(QThread):
     targets_found = Signal(object)
 
     def run(self) -> None:
-        self.targets_found.emit(discover_synthnv_targets())
+        # The dialog keeps unresponsive devices non-selectable, but still shows
+        # access errors so Linux users can fix permissions without guessing.
+        self.targets_found.emit(discover_usb_targets())
 
 
 class SerialWorker(QThread):
@@ -155,7 +156,7 @@ class SerialWorker(QThread):
             return False
         try:
             self._serial = serial.Serial(port, BAUD_RATE, timeout=RESPONSE_TIMEOUT_SECONDS, write_timeout=1)
-        except (serial.SerialException, OSError) as error:
+        except (serial.SerialException, OSError, UnicodeError) as error:
             message = serial_access_hint(error)
             LOGGER.warning("could not open serial port=%s error=%s", port, error)
             if message != self._last_connection_error:
@@ -203,7 +204,7 @@ class SerialWorker(QThread):
             response = ""
             if request.expect_response:
                 if request.drain_response:
-                    response = self._read_until_quiet()
+                    response = self._read_until_quiet(request.response_terminator)
                 else:
                     response = self._serial.read_until(b"\n").decode("utf-8", errors="replace").rstrip("\r\n")
                 if not response:
@@ -221,16 +222,19 @@ class SerialWorker(QThread):
             self.completed.emit(request.identifier, "", "Device disconnected")
             self._fail_pending_requests()
 
-    def _read_until_quiet(self) -> str:
-        """Read non-newline protocol replies (`?` and sweep result) completely."""
+    def _read_until_quiet(self, terminator: str | None = None) -> str:
+        """Read multi-part protocol replies (`?` and sweep result) completely."""
         assert self._serial is not None
         chunks: list[bytes] = []
+        terminator_bytes = terminator.encode("ascii") if terminator else None
         deadline = monotonic() + RESPONSE_TIMEOUT_SECONDS
         quiet_since: float | None = None
         while monotonic() < deadline:
             waiting = self._serial.in_waiting
             if waiting:
                 chunks.append(self._serial.read(waiting))
+                if terminator_bytes and terminator_bytes in b"".join(chunks):
+                    break
                 quiet_since = None
                 self.msleep(20)
                 continue

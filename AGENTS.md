@@ -11,10 +11,11 @@ Run the test suite with `uv run python -m unittest discover -s tests -v`.
 
 The official documentation does not accurately describe the observed frequency
 response behavior. Device testing found that frequency setters accept MHz while
-queries return kHz; the application converts queried frequency values to MHz
-before display and export. This has not been exhaustively verified for every
-command or firmware revision. Treat protocol-response handling cautiously and
-verify changes against physical hardware before relying on them.
+frequency-bearing queries return kHz; the application converts queried
+frequency values to MHz before display and export. This has not been
+exhaustively verified for every command or firmware revision. Treat
+protocol-response handling cautiously and verify changes against physical
+hardware before relying on them.
 
 On tested firmware 2.5f, the sweep options `r` and `d` accept writes but their
 `r?` and `d?` queries time out. Keep them write-only: do not include them in

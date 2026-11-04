@@ -47,22 +47,26 @@ provides driver and product resources on the [official SynthNV product page](htt
 
 ## Features
 
-- Reads every queryable persisted device field at startup. The `r` and `d`
-  sweep options are write-only on tested firmware. Settings controls which
-  fields are shown; hidden fields remain available for import and export.
+- Reads supported device-state fields at startup. The `r` and `d` sweep
+  options are write-only on tested firmware. Field visibility changes only the
+  UI; hidden supported fields remain retained and can be imported or exported
+  where the protocol permits.
 - Groups RF output, calibration, PLL, GPIO, sweep, AM, pulse, and device
   controls in the main window, with a compact serial console.
 - Imports and exports device values as JSON. Import temporarily disables RF
   output, applies changed writable fields, then restores its prior RF-output
-  state; errors and changes are reported in the console.
-- Saves an optional local persistent device-value profile, applied after the
-  initial device read. Local `settings.json` and `persistent_configuration.json`
-  are created from tracked defaults and ignored by Git.
+  state; errors and changes are reported in the console. RF output and
+  write-only sweep settings are omitted from JSON and persistent profiles.
+  Active continuous sweep or modulation modes are not restored from files.
+- Provides a dedicated persistent-profile dialog for startup application and
+  manual loading or saving. Local configuration files are ignored by Git.
+  `settings_default.json` is the sole source of the initial field-visibility
+  selection.
 - Detects serial transport failures. Writes and imports are disabled while the
   device is disconnected, while export remains available. A device that reports
-  the same serial number may reconnect automatically; cached writable values
-  are restored with RF output disabled, then verified. Interrupted commands are
-  never replayed.
+  the same serial number may reconnect automatically; eligible cached writable
+  values are restored with RF output disabled, then verified. Interrupted
+  commands are never replayed.
 
 RF power is shown as the documented `0`–`63` register value. The vendor does
 not publish a fixed conversion to output dBm; use the device's `w` value as its
@@ -82,11 +86,13 @@ device has no reported serial number, or an operation was active when it
 disconnects, export values when possible and restart the application after the
 hardware is restored.
 
+If a continuous mode does not answer during a refresh, the session is locked
+and the console recommends a restart; export the last values read by the
+application when useful.
+
 ## Documentation
 
-The `docs/` directory contains vendor PDFs kept for local development
-reference. Consult the current official sources and their applicable terms
-before redistributing them:
+Consult the current official sources and their applicable terms:
 
 - [Serial protocol](https://windfreaktech.com/wp-content/uploads/docs/synthnv/serialcomm.pdf)
 - [Operating instructions](https://windfreaktech.com/wp-content/uploads/docs/synthnv/readme.pdf)
@@ -94,6 +100,10 @@ before redistributing them:
 
 The serial protocol is marked preliminary by the vendor. Verify device
 behavior and limits on physical hardware before relying on it.
+
+Protocol note: observed firmware accepts frequency writes in MHz but returns
+frequency-bearing query responses in kHz. The application converts its modeled
+frequency fields, including sweep extrema, to MHz for display and JSON files.
 
 ## Troubleshooting
 

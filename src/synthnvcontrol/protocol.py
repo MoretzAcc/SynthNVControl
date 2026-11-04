@@ -24,7 +24,7 @@ class Command:
     label: str
     group: str
     kind: FieldKind
-    default_visible: bool = True
+    response_is_frequency: bool = False
 
     @property
     def can_write(self) -> bool:
@@ -41,7 +41,9 @@ class Command:
 
     @property
     def exportable(self) -> bool:
-        return self.code != "?"
+        # RF output is deliberately preserved around imports instead of being
+        # configured by a file. Write-only values cannot be reliably exported.
+        return self.code not in {"?", "o"} and self.can_query
 
     def query_payload(self) -> str:
         return self.code if self.kind is FieldKind.READ_ONLY else f"{self.code}?"
@@ -68,6 +70,10 @@ class Command:
                 raise ValueError("must be a decimal number") from error
             if not number.is_finite():
                 raise ValueError("must be finite")
+            if self.code in {"f", "l", "u"} and not Decimal("34.4") <= number <= Decimal("4400"):
+                raise ValueError("must be from 34.4 to 4400 MHz")
+            if self.code == "s" and number <= 0:
+                raise ValueError("must be greater than zero")
             normalized = format(number.normalize(), "f")
             if "." in normalized:
                 normalized = normalized.rstrip("0").rstrip(".")
@@ -81,22 +87,43 @@ class Command:
     def value_from_response(self, response: str) -> str:
         """Return a canonical value suitable for display and configuration files.
 
-        The SynthNV protocol uses MHz for `f<value>` writes but reports queried
-        frequency in kHz.  Keeping the application value in MHz prevents an
-        exported configuration from becoming 1,000 times too large on import.
+        The SynthNV protocol accepts MHz writes but returns frequency values in
+        kHz. Keeping application values in MHz prevents an exported
+        configuration from becoming 1,000 times too large on import.
         """
         text = response.strip()
-        if self.code == "f":
+        if self.response_is_frequency:
             try:
                 return self.normalize(Decimal(text) / Decimal("1000"))
             except ValueError:
                 return text
+        if self.code == "m":
+            return self._sweep_extrema_from_response(text)
         if self.can_write:
             try:
                 return self.normalize(text)
             except ValueError:
                 return text
         return text
+
+    @staticmethod
+    def _sweep_extrema_from_response(text: str) -> str:
+        """Convert the maximum/minimum sweep response's frequency lines to MHz."""
+        lines = text.splitlines()
+        # `m` reports maximum frequency, maximum dBm, minimum frequency, then
+        # minimum dBm. Frequencies are observed in kHz like other responses.
+        for index in (0, 2):
+            if index >= len(lines):
+                continue
+            try:
+                number = Decimal(lines[index]) / Decimal("1000")
+                normalized = format(number.normalize(), "f")
+                if "." in normalized:
+                    normalized = normalized.rstrip("0").rstrip(".")
+                lines[index] = normalized or "0"
+            except InvalidOperation:
+                continue
+        return "\n".join(lines)
 
     def write_payload(self, value: str) -> str:
         """Build a setter payload in the exact format expected by the device."""
@@ -108,7 +135,7 @@ class Command:
 
 
 COMMANDS: tuple[Command, ...] = (
-    Command("f", "Frequency (MHz)", "RF output", FieldKind.DECIMAL),
+    Command("f", "Frequency (MHz)", "RF output", FieldKind.DECIMAL, True),
     Command("o", "RF output enabled", "RF output", FieldKind.BOOLEAN),
     Command("h", "High power range", "RF output", FieldKind.BOOLEAN),
     Command("a", "RF power setting (0–63)", "RF output", FieldKind.POWER),
@@ -116,9 +143,9 @@ COMMANDS: tuple[Command, ...] = (
     Command("w", "Measured RF power (dBm)", "RF output", FieldKind.READ_ONLY),
     Command("V", "ADC voltage reference", "Calibration", FieldKind.DECIMAL),
     Command("Q", "Power measurement offset", "Calibration", FieldKind.DECIMAL),
-    Command("x", "Internal reference", "Calibration", FieldKind.BOOLEAN),
     Command("p", "Phase lock status", "PLL", FieldKind.READ_ONLY),
-    Command("*", "PLL comparator (MHz)", "PLL", FieldKind.DECIMAL),
+    Command("x", "Internal reference", "PLL", FieldKind.BOOLEAN),
+    Command("*", "PLL comparator (MHz)", "PLL", FieldKind.DECIMAL, True),
     Command("H0", "PLL register 0", "PLL", FieldKind.HEX),
     Command("H1", "PLL register 1", "PLL", FieldKind.HEX),
     Command("H2", "PLL register 2", "PLL", FieldKind.HEX),
@@ -134,29 +161,28 @@ COMMANDS: tuple[Command, ...] = (
     Command("-", "Serial number", "Device", FieldKind.READ_ONLY),
     Command("?", "Protocol help", "Device", FieldKind.READ_ONLY),
     Command("e", "Write EEPROM", "Device", FieldKind.ACTION),
-    # Fields below are documented in the official serial protocol but were not
-    # represented by the predecessor. They remain hidden by default.
-    Command("l", "Sweep lower frequency (MHz)", "Sweep", FieldKind.DECIMAL, False),
-    Command("u", "Sweep upper frequency (MHz)", "Sweep", FieldKind.DECIMAL, False),
-    Command("s", "Sweep step size (MHz)", "Sweep", FieldKind.DECIMAL, False),
-    Command("t", "Sweep step time (ms)", "Sweep", FieldKind.DECIMAL, False),
-    Command("g", "Run sweep", "Sweep", FieldKind.BOOLEAN, False),
-    Command("r", "Read detector while sweeping", "Sweep", FieldKind.WRITE_ONLY, False),
-    Command("d", "Report points while sweeping", "Sweep", FieldKind.WRITE_ONLY, False),
-    Command("m", "Sweep maximum and minimum", "Sweep", FieldKind.READ_ONLY, False),
-    Command("c", "Continuous sweep", "Sweep", FieldKind.BOOLEAN, False),
-    Command("F", "AM step time (µs)", "AM modulation", FieldKind.INTEGER, False),
-    Command("q", "AM cycle repetitions", "AM modulation", FieldKind.INTEGER, False),
-    Command("%", "AM gain (%)", "AM modulation", FieldKind.INTEGER, False),
-    Command("@", "AM offset", "AM modulation", FieldKind.INTEGER, False),
-    Command("B", "Run one AM burst", "AM modulation", FieldKind.ACTION, False),
-    Command("A", "Continuous AM burst", "AM modulation", FieldKind.BOOLEAN, False),
-    Command("P", "Pulse on time (µs)", "Pulse modulation", FieldKind.INTEGER, False),
-    Command("O", "Pulse off time (µs)", "Pulse modulation", FieldKind.INTEGER, False),
-    Command("R", "Pulse repetitions", "Pulse modulation", FieldKind.INTEGER, False),
-    Command("M", "Pulse off amplitude", "Pulse modulation", FieldKind.INTEGER, False),
-    Command("G", "Run one pulse burst", "Pulse modulation", FieldKind.ACTION, False),
-    Command("j", "Continuous pulse", "Pulse modulation", FieldKind.BOOLEAN, False),
+    # Visibility defaults are maintained exclusively in settings_default.json.
+    Command("l", "Sweep lower frequency (MHz)", "Sweep", FieldKind.DECIMAL, True),
+    Command("u", "Sweep upper frequency (MHz)", "Sweep", FieldKind.DECIMAL, True),
+    Command("s", "Sweep step size (MHz)", "Sweep", FieldKind.DECIMAL, True),
+    Command("t", "Sweep step time (ms)", "Sweep", FieldKind.DECIMAL),
+    Command("g", "Run sweep", "Sweep", FieldKind.BOOLEAN),
+    Command("r", "Read detector while sweeping", "Sweep", FieldKind.WRITE_ONLY),
+    Command("d", "Report points while sweeping", "Sweep", FieldKind.WRITE_ONLY),
+    Command("m", "Sweep extrema (MHz / dBm)", "Sweep", FieldKind.READ_ONLY),
+    Command("c", "Continuous sweep", "Sweep", FieldKind.BOOLEAN),
+    Command("F", "AM step time (µs)", "AM modulation", FieldKind.INTEGER),
+    Command("q", "AM cycle repetitions", "AM modulation", FieldKind.INTEGER),
+    Command("%", "AM gain (%)", "AM modulation", FieldKind.INTEGER),
+    Command("@", "AM offset", "AM modulation", FieldKind.INTEGER),
+    Command("B", "Run one AM burst", "AM modulation", FieldKind.ACTION),
+    Command("A", "Continuous AM burst", "AM modulation", FieldKind.BOOLEAN),
+    Command("P", "Pulse on time (µs)", "Pulse modulation", FieldKind.INTEGER),
+    Command("O", "Pulse off time (µs)", "Pulse modulation", FieldKind.INTEGER),
+    Command("R", "Pulse repetitions", "Pulse modulation", FieldKind.INTEGER),
+    Command("M", "Pulse off amplitude", "Pulse modulation", FieldKind.INTEGER),
+    Command("G", "Run one pulse burst", "Pulse modulation", FieldKind.ACTION),
+    Command("j", "Continuous pulse", "Pulse modulation", FieldKind.BOOLEAN),
 )
 
 BY_CODE = {command.code: command for command in COMMANDS}
