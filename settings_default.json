@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "visible_fields": [
+    "f", "o", "h", "a", "D", "w", "V", "Q", "v", "e", "x", "p",
+    "C1", "C2", "#", "$", "H0", "H1", "H2", "H3", "H4", "H5", "*",
+    "+", "-", "?"
+  ],
+  "use_persistent_configuration": false
+}

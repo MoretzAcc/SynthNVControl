@@ -2,10 +2,19 @@
 
 ## Project status
 
-This repository is currently a skeleton for MoSynthNVControl. No application
-source, dependency manifest, or test configuration has been established yet.
-Treat the first implementation work as an opportunity to document the selected
-runtime, package manager, and development commands here.
+MoSynthNVControl is a Python 3.14+ desktop application managed with `uv`.
+Source lives in `src/synthnvcontrol`, and the supported entry points are
+`uv run synthnv`.
+Run the test suite with `uv run python -m unittest discover -s tests -v`.
+
+## Protocol implementation note
+
+The official documentation does not accurately describe the observed frequency
+response behavior. Device testing found that frequency setters accept MHz while
+queries return kHz; the application converts queried frequency values to MHz
+before display and export. This has not been exhaustively verified for every
+command or firmware revision. Treat protocol-response handling cautiously and
+verify changes against physical hardware before relying on them.
 
 ## Working conventions
 

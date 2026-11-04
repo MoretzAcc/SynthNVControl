@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+
+# Local preferences and device configurations may contain operational values.
+settings.json
+persistent_configuration.json
