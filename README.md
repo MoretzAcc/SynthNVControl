@@ -20,9 +20,8 @@ the SynthNV serial port in the connection window to open the controller.
 
 ### Linux serial-port access
 
-The device name depends on the installed Linux driver; `/dev/ttyACM0` and
-`/dev/ttyUSB0` are examples only. Use the port shown by the application, then
-inspect its owning group:
+The device name depends on the installed Linux driver; Use the port shown by the application, examples are `/dev/ttyACM0` and
+`/dev/ttyUSB0`, then inspect its owning group:
 
 ```bash
 PORT=/dev/ttyACM0  # Replace with the port shown by the application.
