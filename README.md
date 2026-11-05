@@ -20,13 +20,11 @@ the SynthNV serial port in the connection window to open the controller.
 
 ### Linux serial-port access
 
-The device name depends on the installed Linux driver; `/dev/ttyACM0` and
-`/dev/ttyUSB0` are examples only. Use the port shown by the application, then
-inspect its owning group:
+The device name depends on the installed Linux driver; Use the port shown by the application, examples are `/dev/ttyACM0` and
+`/dev/ttyUSB0`, then inspect its owning group:
 
 ```bash
-PORT=/dev/ttyACM0  # Replace with the port shown by the application.
-ls -l "$PORT"
+ls -l "/dev/ttyACM0" # Replace with the port shown by the application.
 ```
 
 Then add the current user to that group; it is commonly `dialout` or `uucp`:
@@ -35,10 +33,10 @@ Then add the current user to that group; it is commonly `dialout` or `uucp`:
 sudo usermod -aG dialout "$USER"
 ```
 
-Sign out and back in before starting the application again. Replace `dialout`
-with the group reported by `ls` when necessary. Do not run the GUI with `sudo`:
+Restart your PC before starting the application again. 
+Do not run the GUI with `sudo`:
 it gives the full application unnecessary administrator access and can create
-root-owned project, settings, or export files.
+root-owned project, settings, or export files which may lead to problems in the future.
 
 ### Windows serial-port access
 
