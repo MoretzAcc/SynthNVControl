@@ -34,6 +34,6 @@ def serial_access_hint(error: Exception) -> str:
     if sys.platform.startswith("linux"):
         return (
             f"Could not open the serial port: {error}. Add your user to the serial-device group "
-            "(commonly dialout or uucp), then sign in again. Running the GUI with sudo is not recommended."
+            "(commonly dialout or uucp), then reboot your PC. Running the GUI with sudo is not recommended."
         )
     return f"Could not open the serial port: {error}"

@@ -15,7 +15,14 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QPushButton
 from synthnvcontrol.device import DeviceTarget, discover_synthnv_targets, discover_usb_targets
 from synthnvcontrol.protocol import BY_CODE, COMMANDS
 from synthnvcontrol.storage import load_json
-from synthnvcontrol.ui import FieldRow, MainWindow, PersistentProfileDialog, StartupDialog, ToggleSwitch
+from synthnvcontrol.ui import (
+    FieldRow,
+    MainWindow,
+    PersistentProfileDialog,
+    SerialAccessDialog,
+    StartupDialog,
+    ToggleSwitch,
+)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -116,6 +123,15 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(dialog._inaccessible_ports, ["/dev/ttyACM0"])
         self.assertFalse(dialog.access_warning.isHidden())
         self.assertFalse(dialog.access_help_button.isHidden())
+
+    def test_serial_access_help_has_selectable_port_list_and_copyable_command(self) -> None:
+        with patch("synthnvcontrol.ui.serial_port_group", return_value="dialout"):
+            dialog = SerialAccessDialog(["/dev/ttyACM0"], None)
+
+        self.assertIn("/dev/ttyACM0", dialog.port_list.toPlainText())
+        self.assertEqual(dialog.command_field.text(), 'sudo usermod -aG dialout "$USER"')
+        dialog.copy_command()
+        self.assertEqual(self.application.clipboard().text(), dialog.command_field.text())
 
     def test_boolean_controls_show_and_send_their_semantic_state(self) -> None:
         applied: list[tuple[str, str]] = []

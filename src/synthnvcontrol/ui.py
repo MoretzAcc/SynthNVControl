@@ -11,10 +11,10 @@ from typing import Any
 from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from synthnvcontrol.device import DeviceTarget, DiscoveryWorker, Request, SerialWorker, is_supported_synthnv_model
@@ -38,27 +38,42 @@ class SerialAccessDialog(QDialog):
         self.resize(620, 320)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Ports that could not be opened:"))
-        for port in ports:
-            group = serial_port_group(port)
-            group_text = group or "could not determine group"
-            layout.addWidget(QLabel(f"{port}  —  group: {group_text}"))
+        port_groups = [(port, serial_port_group(port)) for port in ports]
+        self.port_list = QPlainTextEdit()
+        self.port_list.setReadOnly(True)
+        self.port_list.setMaximumHeight(100)
+        self.port_list.setPlainText(
+            "\n".join(f"{port}  —  group: {group or 'could not determine group'}" for port, group in port_groups)
+        )
+        layout.addWidget(self.port_list)
         layout.addSpacing(10)
-        example_group = next((serial_port_group(port) for port in ports if serial_port_group(port)), None)
+        example_group = next((group for _port, group in port_groups if group), None)
         if example_group:
-            instruction = (
-                f'To allow access, run:\n\n  sudo usermod -aG {example_group} "$USER"\n\n'
-                "Then sign out and sign in again before starting SynthNV Control."
-            )
+            layout.addWidget(QLabel("To allow access, run this command, then reboot your PC."))
+            command_row = QHBoxLayout()
+            self.command_field = QLineEdit(f'sudo usermod -aG {example_group} "$USER"')
+            self.command_field.setReadOnly(True)
+            self.copy_button = QToolButton()
+            self.copy_button.setText("⧉")
+            self.copy_button.setToolTip("Copy command")
+            self.copy_button.clicked.connect(self.copy_command)
+            command_row.addWidget(self.command_field)
+            command_row.addWidget(self.copy_button)
+            layout.addLayout(command_row)
         else:
-            instruction = "Could not determine a serial-device group for these ports. Inspect their ownership with ls -l."
-        explanation = QLabel(instruction)
-        explanation.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
+            self.command_field = None
+            self.copy_button = None
+            explanation = QLabel("Could not determine a serial-device group for these ports. Inspect their ownership with ls -l.")
+            explanation.setWordWrap(True)
+            layout.addWidget(explanation)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         close.setDefault(True)
         layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def copy_command(self) -> None:
+        if self.command_field is not None:
+            QApplication.clipboard().setText(self.command_field.text())
 
 
 class StartupDialog(QDialog):

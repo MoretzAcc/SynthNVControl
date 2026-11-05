@@ -114,7 +114,7 @@ frequency fields, including sweep extrema, to MHz for display and JSON files.
 ## Troubleshooting
 
 - **No device listed:** reconnect the USB cable, verify the Windows driver or
-  Linux serial-group membership, and restart the application.
+  Linux serial-group membership, and reboot your PC.
 - **Disconnected:** export remains enabled; reconnect the same unit and wait
   for its state refresh, or restart after exporting values.
 - **No response during a sweep or modulation:** stop or power-cycle the device,
