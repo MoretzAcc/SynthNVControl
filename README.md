@@ -6,6 +6,9 @@ SynthNVControl is a Windows and Linux desktop controller for Windfreak
 SynthNV USB-serial signal generators. It uses Python 3.14+, [uv](https://docs.astral.sh/uv/),
 PySide6, and pyserial.
 
+Note that, as of now, this software is exclusively designed for the WFT SynthNV, and not for sister devices like the WFT SynthNV Pro.
+
+
 ## Run
 
 Install Python 3.14 or later and [uv](https://docs.astral.sh/uv/), then run the
