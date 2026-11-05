@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
-from synthnvcontrol.device import DeviceTarget, DiscoveryWorker, Request, SerialWorker
+from synthnvcontrol.device import DeviceTarget, DiscoveryWorker, Request, SerialWorker, is_supported_synthnv_model
+from synthnvcontrol.platform_support import is_serial_permission_error, serial_port_group
 from synthnvcontrol.protocol import BY_CODE, COMMANDS, GROUPS, Command, FieldKind
 from synthnvcontrol.storage import load_persistent, load_settings, save_persistent, save_settings
 
@@ -26,6 +27,38 @@ LOGGER = logging.getLogger(__name__)
 DEPENDENT_STATUS_CODES: dict[str, tuple[str, ...]] = {"x": ("p", "*")}
 CONTINUOUS_MODE_CODES = {"c", "A", "j"}
 NO_READBACK_CODES = CONTINUOUS_MODE_CODES | {"g"}
+
+
+class SerialAccessDialog(QDialog):
+    """Explain Linux serial-port group access for detected inaccessible ports."""
+
+    def __init__(self, ports: list[str], parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Serial port access")
+        self.resize(620, 320)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Ports that could not be opened:"))
+        for port in ports:
+            group = serial_port_group(port)
+            group_text = group or "could not determine group"
+            layout.addWidget(QLabel(f"{port}  —  group: {group_text}"))
+        layout.addSpacing(10)
+        example_group = next((serial_port_group(port) for port in ports if serial_port_group(port)), None)
+        if example_group:
+            instruction = (
+                f'To allow access, run:\n\n  sudo usermod -aG {example_group} "$USER"\n\n'
+                "Then sign out and sign in again before starting SynthNV Control."
+            )
+        else:
+            instruction = "Could not determine a serial-device group for these ports. Inspect their ownership with ls -l."
+        explanation = QLabel(instruction)
+        explanation.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        close.setDefault(True)
+        layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
 
 
 class StartupDialog(QDialog):
@@ -39,11 +72,26 @@ class StartupDialog(QDialog):
         self.resize(680, 360)
         self.settings = load_settings()
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Select the SynthNV serial device."))
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Select the SynthNV serial device."))
+        header.addStretch()
+        refresh = QPushButton("Refresh")
+        header.addWidget(refresh)
+        layout.addLayout(header)
         self.devices = QListWidget()
         layout.addWidget(self.devices)
+        self.access_warning = QLabel("It seems you are missing permission to access a serial device.")
+        self.access_help_button = QPushButton("Show access help")
+        self.access_help_button.clicked.connect(self.show_access_help)
+        access_row = QHBoxLayout()
+        access_row.addWidget(self.access_warning)
+        access_row.addWidget(self.access_help_button)
+        access_row.addStretch()
+        layout.addLayout(access_row)
+        self.access_warning.hide()
+        self.access_help_button.hide()
+        self._inaccessible_ports: list[str] = []
         buttons = QHBoxLayout()
-        refresh = QPushButton("Refresh")
         self.connect_button = QPushButton("Connect")
         self.connect_button.setDefault(True)
         buttons.addWidget(refresh)
@@ -72,6 +120,9 @@ class StartupDialog(QDialog):
         if self._scanner is not None and self._scanner.isRunning():
             return
         self.devices.clear()
+        self._inaccessible_ports = []
+        self.access_warning.hide()
+        self.access_help_button.hide()
         self.devices.addItem("Scanning USB serial devices and probing SynthNV serial-number responses…")
         self._scanner = DiscoveryWorker()
         self._scanner.targets_found.connect(self.show_targets)
@@ -83,9 +134,13 @@ class StartupDialog(QDialog):
         for target, details, serial_response, probe_error in targets:
             if not serial_response and not probe_error:
                 continue
+            if is_serial_permission_error(probe_error):
+                self._inaccessible_ports.append(target.port)
             response_text = serial_response or probe_error or "No response to SynthNV serial-number command"
-            item = QListWidgetItem(f"{details}\nPort: {target.port} · Serial: {response_text}")
-            if serial_response:
+            model_type = getattr(target, "model_type", None)
+            model_text = model_type or "Unknown"
+            item = QListWidgetItem(f"{details}\nPort: {target.port} · Serial: {response_text} · Model: {model_text}")
+            if serial_response and is_supported_synthnv_model(model_type):
                 item.setData(Qt.ItemDataRole.UserRole, target)
                 if first_selectable is None:
                     first_selectable = self.devices.count()
@@ -97,6 +152,12 @@ class StartupDialog(QDialog):
             self.connect_button.setFocus()
         else:
             self.devices.addItem("No accessible SynthNV device found.")
+        if self._inaccessible_ports:
+            self.access_warning.show()
+            self.access_help_button.show()
+
+    def show_access_help(self) -> None:
+        SerialAccessDialog(self._inaccessible_ports, self).exec()
 
     def accept_target(self) -> None:
         item = self.devices.currentItem()
@@ -329,7 +390,6 @@ class FieldRow(QWidget):
         else:
             self.current.setText(value or "—")
             self.current.setStyleSheet("")
-        self.current.setToolTip(value)
         if (
             isinstance(self.editor, QPushButton)
             and self.editor.property("status_button")
@@ -591,8 +651,30 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.warning(self, "Invalid value", f"{command.label}: {error}")
             return
+        if command.code in {"r", "d"} and value == "1" and self.values.get("c") == "1":
+            QMessageBox.warning(
+                self,
+                "Continuous sweep active",
+                "Disable continuous sweep before enabling sweep readings or sweep reports.",
+            )
+            return
+        if command.code == "c" and value == "1" and any(self.values.get(code) == "1" for code in {"r", "d"}):
+            QMessageBox.warning(
+                self,
+                "Sweep reporting active",
+                "Disable sweep readings and sweep reports before enabling continuous sweep.",
+            )
+            return
         payload = command.write_payload(value)
         self.log(f"> {payload}")
+        if command.code == "g" and value == "1" and self.values.get("c") == "1":
+            self._submit(
+                payload,
+                False,
+                "user continuous sweep",
+                lambda _response, error: self._after_continuous_sweep_start(error),
+            )
+            return
         if command.code == "g" and value == "1":
             self._submit(
                 payload,
@@ -604,6 +686,15 @@ class MainWindow(QMainWindow):
             )
             return
         self._submit(payload, False, "user field edit", lambda _response, error: self._after_set(command, value, error))
+
+    def _after_continuous_sweep_start(self, error: str) -> None:
+        if error:
+            self.log(f"[continuous sweep] {error}")
+            return
+        self.values["g"] = "1"
+        if "g" in self.rows:
+            self.rows["g"].show_value("1")
+        self.log("[continuous sweep] Started; send c0 to stop it before further commands.")
 
     def _after_sweep_stream(self, value: str, response: str, error: str, show_stream: bool) -> None:
         if error:
@@ -654,7 +745,13 @@ class MainWindow(QMainWindow):
         query_next()
 
     def run_action(self, command: Command) -> None:
-        if QMessageBox.question(self, "Confirm device action", f"Run '{command.label}' on the SynthNV?") != QMessageBox.StandardButton.Yes:
+        message = f"Run '{command.label}' on the SynthNV?"
+        if command.code == "e":
+            message = (
+                "Write the current settings to EEPROM?\n\n"
+                "Warning: active sweep or modulation modes can be saved and may prevent normal USB communication after restart."
+            )
+        if QMessageBox.question(self, "Confirm device action", message) != QMessageBox.StandardButton.Yes:
             return
         self.log(f"> {command.code}")
         self._submit(command.code, False, "user action", lambda _response, error: self.log(f"[{command.label}] completed." if not error else f"[{command.label}] {error}"))
@@ -803,8 +900,7 @@ class MainWindow(QMainWindow):
                 self.values["o"] = "0"
                 if "o" in self.rows:
                     self.rows["o"].show_value("0")
-                self.log(f"[{operation}] RF output remains disabled after profile application.")
-                self.log(f"[{operation}] Finished.")
+                self.log(f"[{operation}] Completed; RF output remains disabled.")
                 complete()
                 return
             payload = BY_CODE["o"].write_payload(previous_rf_output)
@@ -819,7 +915,7 @@ class MainWindow(QMainWindow):
                 self.values["o"] = previous_rf_output
                 if "o" in self.rows:
                     self.rows["o"].show_value(previous_rf_output)
-            self.log(f"[{operation}] Finished.")
+            self.log(f"[{operation}] Completed; RF output was disabled during import.")
             complete()
 
         def apply_next(index: int = 0) -> None:

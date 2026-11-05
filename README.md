@@ -87,6 +87,11 @@ device has no reported serial number, or an operation was active when it
 disconnects, export values when possible and restart the application after the
 hardware is restored.
 
+Continuous sweep does not emit `endofsweep.` and must not be combined with
+sweep readings or sweep reports. Stop it with `c0` before sending further
+commands. Writing active modes to EEPROM can make the device unresponsive
+after restart.
+
 If a continuous mode does not answer during a refresh, the session is locked
 and the console recommends a restart; export the last values read by the
 application when useful.
@@ -123,8 +128,8 @@ uv run python -m unittest discover -s tests -v
 uv run python -m compileall src
 ```
 
-See `AGENTS.md` for contributor conventions and `LEGACY_ISSUES.md` for the
-predecessor audit.
+See `AGENTS.md` for contributor conventions and
+`dev/LEGACY_ISSUES.md` for the predecessor audit.
 
 ## License
 

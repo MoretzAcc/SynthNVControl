@@ -1,6 +1,6 @@
 # Legacy issues deliberately not carried forward
 
-The predecessor is retained under `old_reference_code/` for behavioral
+The predecessor is retained under `dev/old_reference_code/` for behavioral
 reference only. The following markers record design decisions in the rewrite.
 
 - **LEGACY-001:** The advertised EEPROM command was unreachable through the

@@ -10,12 +10,12 @@ from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QPushButton
-from synthnvcontrol.device import discover_synthnv_targets, discover_usb_targets
+from synthnvcontrol.device import DeviceTarget, discover_synthnv_targets, discover_usb_targets
 from synthnvcontrol.protocol import BY_CODE, COMMANDS
 from synthnvcontrol.storage import load_json
-from synthnvcontrol.ui import FieldRow, MainWindow, PersistentProfileDialog, ToggleSwitch
+from synthnvcontrol.ui import FieldRow, MainWindow, PersistentProfileDialog, StartupDialog, ToggleSwitch
 
 
 class ProtocolTests(unittest.TestCase):
@@ -80,7 +80,7 @@ class ProtocolTests(unittest.TestCase):
         ]
         with patch("synthnvcontrol.device.list_ports.comports", return_value=ports), patch(
             "synthnvcontrol.device._probe_serial_number", side_effect=[("SN-42", None), (None, "Access denied")]
-        ) as probe:
+        ) as probe, patch("synthnvcontrol.device._probe_model_type", return_value=("WFT SynthNV 42", None)):
             targets = discover_usb_targets()
         self.assertEqual(len(targets), 2)
         self.assertEqual(targets[0][0].serial_number, "SN-42")
@@ -90,12 +90,32 @@ class ProtocolTests(unittest.TestCase):
 
     def test_startup_selector_only_keeps_devices_with_a_serial_response(self) -> None:
         targets = [
-            (SimpleNamespace(port="/dev/ttyUSB0"), "SynthNV", "SN-42", None),
-            (SimpleNamespace(port="/dev/ttyUSB1"), "Other device", None, "No response"),
+            (SimpleNamespace(port="/dev/ttyUSB0", model_type="WFT SynthNV 42"), "SynthNV", "SN-42", None),
+            (SimpleNamespace(port="/dev/ttyUSB1", model_type=None), "Other device", None, "No response"),
         ]
         with patch("synthnvcontrol.device.discover_usb_targets", return_value=targets):
             responsive = discover_synthnv_targets()
         self.assertEqual(responsive, [targets[0]])
+
+    def test_startup_disables_a_recognized_foreign_model(self) -> None:
+        with patch.object(StartupDialog, "refresh"):
+            dialog = StartupDialog()
+        dialog.show_targets(
+            [(DeviceTarget("/dev/ttyUSB0", "SN-42", "WFT SynthNVP 42"), "Windfreak", "SN-42", None)]
+        )
+        item = dialog.devices.item(0)
+        self.assertFalse(bool(item.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertIn("SynthNVP", item.text())
+
+    def test_startup_shows_access_help_for_permission_denied_ports(self) -> None:
+        with patch.object(StartupDialog, "refresh"):
+            dialog = StartupDialog()
+        dialog.show_targets(
+            [(SimpleNamespace(port="/dev/ttyACM0"), "SynthNV", None, "Permission denied")]
+        )
+        self.assertEqual(dialog._inaccessible_ports, ["/dev/ttyACM0"])
+        self.assertFalse(dialog.access_warning.isHidden())
+        self.assertFalse(dialog.access_help_button.isHidden())
 
     def test_boolean_controls_show_and_send_their_semantic_state(self) -> None:
         applied: list[tuple[str, str]] = []
@@ -259,6 +279,17 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(window._submit.call_args.args[1])
         self.assertTrue(window._submit.call_args.kwargs["drain_response"])
         self.assertEqual(window._submit.call_args.kwargs["response_terminator"], "endofsweep.")
+
+    def test_continuous_sweep_does_not_wait_for_an_end_marker(self) -> None:
+        window = MainWindow.__new__(MainWindow)
+        window.values = {"c": "1"}
+        window.log = MagicMock()
+        window._submit = MagicMock()
+
+        window.apply_value(BY_CODE["g"], "1")
+
+        self.assertFalse(window._submit.call_args.args[1])
+        self.assertEqual(window._submit.call_args.args[2], "user continuous sweep")
 
     def test_persistent_profile_keeps_rf_output_disabled(self) -> None:
         window = MainWindow.__new__(MainWindow)

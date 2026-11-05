@@ -47,6 +47,7 @@ def log_command(
 class DeviceTarget:
     port: str
     serial_number: str | None
+    model_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,12 @@ class Request:
     response_terminator: str | None = None
 
 
+def is_supported_synthnv_model(model_type: str | None) -> bool:
+    """Accept the documented SynthNV model family, but never SynthNV Pro."""
+    prefix = "WFT SynthNV "
+    return bool(model_type and model_type.startswith(prefix) and model_type[len(prefix):].strip().isdigit())
+
+
 def discover_usb_targets() -> list[tuple[DeviceTarget, str, str | None, str | None]]:
     """Return USB serial devices with their optional SynthNV serial response."""
     targets: list[tuple[DeviceTarget, str, str | None, str | None]] = []
@@ -67,12 +74,16 @@ def discover_usb_targets() -> list[tuple[DeviceTarget, str, str | None, str | No
             continue
         LOGGER.info("probing USB serial device port=%s", port.device)
         serial_number, probe_error = _probe_serial_number(port.device)
+        model_type: str | None = None
+        if serial_number:
+            model_type, model_error = _probe_model_type(port.device)
+            probe_error = probe_error or model_error
         details = " · ".join(part for part in (port.description, port.manufacturer) if part)
         usb_id = f"{port.vid:04X}:{port.pid:04X}" if port.pid is not None else f"{port.vid:04X}"
         description = f"{details} · {usb_id}" if details else usb_id
-        targets.append((DeviceTarget(port.device, serial_number), description, serial_number, probe_error))
+        targets.append((DeviceTarget(port.device, serial_number, model_type), description, serial_number, probe_error))
         if serial_number:
-            LOGGER.info("SynthNV serial-number response port=%s serial=%r", port.device, serial_number)
+            LOGGER.info("SynthNV serial-number response port=%s serial=%r model=%r", port.device, serial_number, model_type)
         elif probe_error:
             LOGGER.warning("serial probe failed port=%s reason=%s", port.device, probe_error)
         else:
@@ -81,8 +92,8 @@ def discover_usb_targets() -> list[tuple[DeviceTarget, str, str | None, str | No
 
 
 def discover_synthnv_targets() -> list[tuple[DeviceTarget, str, str | None, str | None]]:
-    """Return only USB serial devices that answer the SynthNV `-` command."""
-    return [target for target in discover_usb_targets() if target[2] is not None]
+    """Return only supported SynthNV models with a serial-number response."""
+    return [target for target in discover_usb_targets() if target[2] is not None and is_supported_synthnv_model(target[0].model_type)]
 
 
 def _probe_serial_number(port: str) -> tuple[str | None, str | None]:
@@ -99,6 +110,22 @@ def _probe_serial_number(port: str) -> tuple[str | None, str | None]:
             response = connection.read_until(b"\n").decode("utf-8", errors="replace").strip()
     except (serial.SerialException, OSError) as error:
         LOGGER.warning("could not probe serial number port=%s error=%s", port, error)
+        return None, serial_access_hint(error)
+    return response or None, None
+
+
+def _probe_model_type(port: str) -> tuple[str | None, str | None]:
+    """Ask a confirmed serial device for its model identification string."""
+    try:
+        with serial.Serial(port, BAUD_RATE, timeout=0.5, write_timeout=0.5) as connection:
+            sleep(0.2)
+            connection.reset_input_buffer()
+            log_command("sending", "automatic model probe", "+", port=port)
+            connection.write(b"+")
+            connection.flush()
+            response = connection.read_until(b"\n").decode("utf-8", errors="replace").strip()
+    except (serial.SerialException, OSError) as error:
+        LOGGER.warning("could not probe model type port=%s error=%s", port, error)
         return None, serial_access_hint(error)
     return response or None, None
 
@@ -136,7 +163,7 @@ class SerialWorker(QThread):
     def identify(self, serial_number: str) -> None:
         """Enable safe reconnect matching after the device serial query completes."""
         if serial_number.strip():
-            self._target = DeviceTarget(self._target.port, serial_number.strip())
+            self._target = DeviceTarget(self._target.port, serial_number.strip(), self._target.model_type)
 
     def stop(self) -> None:
         LOGGER.info("stopping serial worker")
